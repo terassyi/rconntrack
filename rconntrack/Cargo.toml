@@ -1,0 +1,11 @@
+[package]
+name = "rconntrack"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { workspace = true }
+build-info = { workspace = true }
+
+[build-dependencies]
+build-info-build = { workspace = true }

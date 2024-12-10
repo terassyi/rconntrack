@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["rconntrack"]
+
+[workspace.dependencies]
+clap = { version = "4.5.23", features = ["derive"] }
+rstest = "0.23.0"
+thiserror = "2.0.6"
+build-info = "0.0.39"
+build-info-build = "0.0.39"
