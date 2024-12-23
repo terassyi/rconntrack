@@ -1,12 +1,21 @@
+use std::process::exit;
+
 use clap::Parser;
 use cmd::Cmd;
 
 mod cmd;
+mod config;
+mod error;
+mod executor;
 mod list;
 mod version;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cmd = Cmd::parse();
 
-    cmd.run();
+    if let Err(e) = cmd.run().await {
+        eprintln!("{e}");
+        exit(-1);
+    }
 }

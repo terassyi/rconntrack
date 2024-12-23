@@ -1,0 +1,10 @@
+[package]
+name = "display"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+conntrack ={ path = "../conntrack" }
+serde_json = "1.0.134"
+tabled = "0.17.0"
+thiserror = { workspace = true }

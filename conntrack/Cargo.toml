@@ -1,0 +1,20 @@
+[package]
+name = "conntrack"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = { workspace = true }
+futures = { workspace = true }
+ipnet = { workspace = true }
+netlink-packet-core = "0.7.0"
+# forked repo. see https://github.com/terassyi/netlink-packet-netfilter/commits/support-ctnetlink-subsys/
+netlink-packet-netfilter = { git = "https://github.com/terassyi/netlink-packet-netfilter", rev = "386a809bda10466d6d1dafafd7fbd62c1662a03d" }
+netlink-packet-utils = "0.5.2"
+netlink-sys = { version = "0.8.7", features = ["tokio", "tokio_socket"] }
+pin-project-lite = "0.2.15"
+rstest = { workspace = true }
+serde = { version = "1.0.216", features = ["derive"] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-macros = { workspace = true }

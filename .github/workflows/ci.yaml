@@ -1,0 +1,23 @@
+name: CI
+on:
+  pull_request:
+    paths-ignore:
+    - '.gitignore'
+    - '.dockerignore'
+    - 'LICENSE'
+    - '**.md'
+  push:
+    branches:
+      - main
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  unit-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: rui314/setup-mold@v1
+      - run: just lint
+      - run: just test
+      - run: just privileged-test

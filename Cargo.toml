@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["rconntrack"]
+members = ["conntrack", "display", "rconntrack"]
 
 [workspace.dependencies]
-clap = { version = "4.5.23", features = ["derive"] }
-rstest = "0.23.0"
+async-trait = "0.1.83"
+futures = "0.3.31"
+ipnet = "2.10.1"
+rstest = "0.24.0"
 thiserror = "2.0.6"
-build-info = "0.0.39"
-build-info-build = "0.0.39"
+tokio = { version = "1.42.0", features = ["full"] }
+tokio-macros = { version = "2.4.0" }
