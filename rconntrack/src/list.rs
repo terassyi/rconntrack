@@ -6,12 +6,10 @@ use conntrack::{
     flow::TcpState,
     request::{Request, RequestMeta, RequestOperation},
 };
-use display::{json::JsonDisplay, table::TableDisplay, Display};
-use futures::TryStreamExt;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 
 use crate::{
-    cmd::Runner,
+    cmd::{DisplayRunner, Runner},
     config::{Family, Output, Protocol, Status, Table},
     error::Error,
     executor::{Executor, Operation},
@@ -77,11 +75,11 @@ pub struct ListCmd {
     reply_dst_addr: Option<String>,
     #[arg(long, help = "Filter for source port from original direction.")]
     orig_src_port: Option<u16>,
-    #[arg(long, help = "Filter for source port from original direction.")]
+    #[arg(long, help = "Filter for destination port from original direction.")]
     orig_dst_port: Option<u16>,
     #[arg(long, help = "Filter for source port from reply direction.")]
     reply_src_port: Option<u16>,
-    #[arg(long, help = "Filter for source port from reply direction.")]
+    #[arg(long, help = "Filter for destination port from reply direction.")]
     reply_dst_port: Option<u16>,
     #[arg(long, help = "Filter for mark")]
     mark: Option<u32>,
@@ -129,35 +127,31 @@ impl Runner for ListCmd {
         );
         let op = ListOperation::new(filter);
         let executor = Executor::new(op);
-        let mut ct = executor.exec().await?;
+        let ct = executor.exec().await?;
 
-        match self.output {
-            Output::Table => {
-                let mut table_display = TableDisplay::new(
-                    std::io::stdout(),
-                    self.detailed_status,
-                    self.family.into(),
-                    self.protocol.into(),
-                );
-                if !self.no_header {
-                    table_display.header().map_err(Error::Display)?;
-                }
-                while let Some(flows) = ct.try_next().await.map_err(Error::Conntrack)? {
-                    for flow in flows.iter() {
-                        table_display.consume(flow).map_err(Error::Display)?;
-                    }
-                }
-            }
-            Output::Json => {
-                let mut json_display = JsonDisplay::new(std::io::stdout());
-                while let Some(flows) = ct.try_next().await.map_err(Error::Conntrack)? {
-                    for flow in flows.iter() {
-                        json_display.consume(flow).map_err(Error::Display)?;
-                    }
-                }
-            }
-        }
-        Ok(())
+        self.display(ct, tokio::io::stdout()).await
+    }
+}
+
+impl DisplayRunner for ListCmd {
+    fn output(&self) -> Output {
+        self.output
+    }
+
+    fn detailed_status(&self) -> bool {
+        self.detailed_status
+    }
+
+    fn family(&self) -> Family {
+        self.family
+    }
+
+    fn protocol(&self) -> Protocol {
+        self.protocol
+    }
+
+    fn no_header(&self) -> bool {
+        self.no_header
     }
 }
 

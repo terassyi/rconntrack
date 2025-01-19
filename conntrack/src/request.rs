@@ -1,10 +1,16 @@
 use ipnet::IpNet;
 use netlink_packet_core::NetlinkMessage;
-use netlink_packet_netfilter::NetfilterMessage;
+use netlink_packet_netfilter::{
+    ctnetlink::nlas::flow::{
+        ip_tuple::{IpTuple, ProtocolTuple, TupleNla},
+        nla::FlowNla,
+    },
+    NetfilterMessage,
+};
 
 use crate::{
     error::Error,
-    flow::{Flow, Protocol, Status, TcpState},
+    flow::{Flow, Protocol, Status, TcpState, Tuple},
     message::MessageBuilder,
     Family, Table,
 };
@@ -23,8 +29,9 @@ impl Request {
     pub fn message(&self) -> Result<NetlinkMessage<NetfilterMessage>, Error> {
         let builder = MessageBuilder::from(&self.meta);
 
-        match self.op {
+        match &self.op {
             RequestOperation::List(_) => Ok(builder.list()),
+            RequestOperation::Get(param) => Ok(builder.get(param)),
         }
     }
 
@@ -36,12 +43,14 @@ impl Request {
 #[derive(Debug)]
 pub enum RequestOperation {
     List(Option<Filter>),
+    Get(GetParams),
 }
 
 impl RequestOperation {
     pub(super) fn filter(&self) -> Option<Filter> {
         match self {
             RequestOperation::List(f) => f.clone(),
+            RequestOperation::Get(_) => None,
         }
     }
 }
@@ -249,6 +258,61 @@ impl Filter {
         }
 
         true
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Direction {
+    Orig(Tuple),
+    Reply(Tuple),
+}
+
+#[derive(Debug, Clone)]
+pub struct GetParams {
+    protocol: Protocol,
+    directed_tuple: Direction,
+}
+
+impl GetParams {
+    pub fn new(protocol: Protocol, directed_tuple: Direction) -> GetParams {
+        GetParams {
+            protocol,
+            directed_tuple,
+        }
+    }
+}
+
+impl From<&GetParams> for Vec<FlowNla> {
+    fn from(param: &GetParams) -> Self {
+        let mut nlas = Vec::new();
+        let t = match &param.directed_tuple {
+            Direction::Orig(tuple) => {
+                let protocol = TupleNla::Protocol(ProtocolTuple {
+                    src_port: tuple.src_port,
+                    dst_port: tuple.dst_port,
+                    protocol: u8::from(param.protocol),
+                });
+                let addrs = TupleNla::Ip(IpTuple {
+                    src_addr: tuple.src_addr,
+                    dst_addr: tuple.dst_addr,
+                });
+                FlowNla::Orig(vec![addrs, protocol])
+            }
+            Direction::Reply(tuple) => {
+                let protocol = TupleNla::Protocol(ProtocolTuple {
+                    src_port: tuple.src_port,
+                    dst_port: tuple.dst_port,
+                    protocol: u8::from(param.protocol),
+                });
+                let addrs = TupleNla::Ip(IpTuple {
+                    src_addr: tuple.src_addr,
+                    dst_addr: tuple.dst_addr,
+                });
+                FlowNla::Reply(vec![addrs, protocol])
+            }
+        };
+        nlas.push(t);
+        nlas
     }
 }
 

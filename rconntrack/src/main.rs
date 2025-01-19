@@ -7,6 +7,7 @@ mod cmd;
 mod config;
 mod error;
 mod executor;
+mod get;
 mod list;
 mod version;
 

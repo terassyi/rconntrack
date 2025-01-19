@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use conntrack::flow::Flow;
 use error::Error;
 
@@ -5,7 +6,8 @@ pub mod error;
 pub mod json;
 pub mod table;
 
+#[async_trait]
 pub trait Display {
-    fn consume(&mut self, flow: &Flow) -> Result<(), Error>;
-    fn header(&mut self) -> Result<(), Error>;
+    async fn consume(&mut self, flow: &Flow) -> Result<(), Error>;
+    async fn header(&mut self) -> Result<(), Error>;
 }
