@@ -1,11 +1,11 @@
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_DUMP};
 use netlink_packet_netfilter::{
     constants::{NFNETLINK_V0, NLM_F_REQUEST},
-    ctnetlink::message::CtNetlinkMessage,
+    ctnetlink::{message::CtNetlinkMessage, nlas::flow::nla::FlowNla},
     NetfilterHeader, NetfilterMessage,
 };
 
-use crate::{Family, Table};
+use crate::{request::GetParams, Family, Table};
 
 #[derive(Debug, Default)]
 pub(super) struct MessageBuilder {
@@ -46,6 +46,7 @@ impl MessageBuilder {
     pub(super) fn list(&self) -> NetlinkMessage<NetfilterMessage> {
         let mut hdr = NetlinkHeader::default();
         hdr.flags = self.flag | NLM_F_DUMP;
+        // Should we set sequence number?
 
         let mut msg = if self.zero {
             NetlinkMessage::new(
@@ -79,6 +80,32 @@ impl MessageBuilder {
                     )),
                 ),
             }
+        };
+        msg.finalize();
+        msg
+    }
+
+    pub(super) fn get(&self, param: &GetParams) -> NetlinkMessage<NetfilterMessage> {
+        let mut hdr = NetlinkHeader::default();
+        hdr.flags = self.flag;
+        // Should we set sequence number?
+        let nlas = Vec::<FlowNla>::from(param);
+        let mut msg = match self.table {
+            Table::Conntrack => NetlinkMessage::new(
+                hdr,
+                NetlinkPayload::from(NetfilterMessage::new(
+                    NetfilterHeader::new(self.family.into(), NFNETLINK_V0, self.res_id),
+                    CtNetlinkMessage::Get(Some(nlas)),
+                )),
+            ),
+            Table::Dying => NetlinkMessage::from(NetfilterMessage::new(
+                NetfilterHeader::new(self.family.into(), NFNETLINK_V0, self.res_id),
+                CtNetlinkMessage::GetDying(Some(nlas)),
+            )),
+            Table::Unconfirmed => NetlinkMessage::from(NetfilterMessage::new(
+                NetfilterHeader::new(self.family.into(), NFNETLINK_V0, self.res_id),
+                CtNetlinkMessage::GetUnconfirmed(Some(nlas)),
+            )),
         };
         msg.finalize();
         msg

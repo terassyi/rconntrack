@@ -1,9 +1,9 @@
-use std::io;
-
+use async_trait::async_trait;
 use conntrack::{
     flow::{Flow, Protocol, Status},
     Family,
 };
+use tokio::io::AsyncWriteExt;
 
 use crate::{error::Error, Display};
 
@@ -25,16 +25,19 @@ PROTOCOL PROTONUM    TIMEOUT   TCP_STATE   ORIG_SRC_ADDR   ORIG_DST_ADDR ORIG_SR
      tcp        6 4294967295 ESTABLISHED xxx.xxx.xxx.xxx xxx.xxx.xxx.xxx         65535         65535 xxx.xxx.xxx.xxx xxx.xxx.xxx.xxx          65535          65535  FIXED_TIMEOUT 65535 65535
  */
 
-pub struct TableDisplay<W: io::Write> {
+pub struct TableDisplay<W: AsyncWriteExt + Unpin + Send + Sync> {
     writer: W,
     detailed_status: bool,
     family: Family,
     protocol: Protocol, // default is Tcp, Tcp shows TCP_STATE(when showing Udp flows TCP_STATE is empty.).
 }
 
+unsafe impl<W> Send for TableDisplay<W> where W: AsyncWriteExt + Unpin + Send + Sync {}
+unsafe impl<W> Sync for TableDisplay<W> where W: AsyncWriteExt + Unpin + Send + Sync {}
+
 impl<W> TableDisplay<W>
 where
-    W: io::Write,
+    W: AsyncWriteExt + Unpin + Send + Sync,
 {
     const HEADER: [Column; 15] = [
         Column::Protocol(String::new()),
@@ -246,20 +249,21 @@ where
     }
 }
 
+#[async_trait]
 impl<W> Display for TableDisplay<W>
 where
-    W: io::Write,
+    W: tokio::io::AsyncWriteExt + Unpin + Send + Sync,
 {
-    fn consume(&mut self, flow: &Flow) -> Result<(), Error> {
+    async fn consume(&mut self, flow: &Flow) -> Result<(), Error> {
         let elms = self.columns(flow);
         let row = self.row(&elms, false);
-        self.writer.write(row.as_bytes()).map_err(Error::IO)?;
+        self.writer.write(row.as_bytes()).await.map_err(Error::IO)?;
         Ok(())
     }
 
-    fn header(&mut self) -> Result<(), Error> {
+    async fn header(&mut self) -> Result<(), Error> {
         let row = self.row(&Self::HEADER, true);
-        self.writer.write(row.as_bytes()).map_err(Error::IO)?;
+        self.writer.write(row.as_bytes()).await.map_err(Error::IO)?;
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{net::IpAddr, str::FromStr};
 
 use error::Error;
 
@@ -150,6 +150,25 @@ impl From<Status> for conntrack::flow::Status {
             Status::FixedTimeout => conntrack::flow::Status::fixed_timeout(),
             Status::Expected => conntrack::flow::Status::expected(),
             Status::Detailed(v) => conntrack::flow::Status::from(v),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Tuple {
+    pub src_addr: IpAddr,
+    pub dst_addr: IpAddr,
+    pub src_port: u16,
+    pub dst_port: u16,
+}
+
+impl From<&Tuple> for conntrack::flow::Tuple {
+    fn from(t: &Tuple) -> Self {
+        conntrack::flow::Tuple {
+            src_addr: t.src_addr,
+            dst_addr: t.dst_addr,
+            src_port: t.src_port,
+            dst_port: t.dst_port,
         }
     }
 }

@@ -55,6 +55,21 @@ where
 
         Ok(())
     }
+
+    pub async fn recv_once(&mut self) -> Result<Vec<Flow>, Error> {
+        self.socket
+            .recv_once()
+            .await?
+            .iter()
+            .filter_map(|msg| {
+                if let NetfilterMessageInner::CtNetlink(msg) = &msg.inner {
+                    Some(Flow::try_from(msg).map_err(Error::Flow))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 impl<S> Stream for Conntrack<S>
