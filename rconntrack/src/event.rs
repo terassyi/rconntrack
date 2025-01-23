@@ -18,8 +18,8 @@ use crate::{
 };
 
 #[derive(Debug, Parser)]
-#[command(about = "List connection tracking entries")]
-pub struct ListCmd {
+#[command(about = "Poll and show connection tracking events")]
+pub struct EventCmd {
     #[arg(
         short,
         long,
@@ -48,13 +48,6 @@ pub struct ListCmd {
         help = "L4 layer protocol (\"any\", \"tcp\", \"udp\")"
     )]
     protocol: Protocol,
-    #[arg(
-        short,
-        long,
-        default_value = "false",
-        help = "Zero counters while listing"
-    )]
-    zero: bool,
     #[arg(
         long,
         help = "Filter for source address from original direction. Accept IP address format or with prefix. e.g. \"192.168.0.1\" or \"192.168.0.0/24\""
@@ -107,12 +100,12 @@ pub struct ListCmd {
 }
 
 #[async_trait]
-impl Runner for ListCmd {
+impl Runner for EventCmd {
     async fn run(&self) -> Result<(), Error> {
         let filter = Filter::new(
             self.table,
             self.family,
-            self.zero,
+            false, // --zero flag is not allowed for Event command.
             self.protocol,
             self.orig_src_addr.clone(),
             self.orig_dst_addr.clone(),
@@ -127,7 +120,7 @@ impl Runner for ListCmd {
             self.tcp_state,
             self.status,
         );
-        let op = ListOperation::new(filter);
+        let op = EventOperation::new(filter);
         let executor = Executor::new(op);
         let ct = executor.exec().await?;
 
@@ -151,7 +144,38 @@ impl Runner for ListCmd {
 }
 
 #[async_trait]
-impl DisplayRunner for ListCmd {
+impl DisplayRunner for EventCmd {
+    async fn process<D: Display + Send + Sync>(
+        &self,
+        mut ct: Conntrack<NfConntrackSocket>,
+        mut display: D,
+    ) -> Result<(), Error> {
+        if self.output.ne(&Output::Json) && !self.no_header() {
+            display.header().await.map_err(Error::Display)?;
+        }
+        loop {
+            tokio::select! {
+                e = tokio::signal::ctrl_c() => {
+                    if let Err(e) = e {
+                        eprintln!("failed to receive ctrl-c: {}", e);
+                    }
+                    break;
+                },
+                res = async {
+                    while let Some(flows) = ct.try_next().await.map_err(Error::Conntrack)? {
+                        for flow in flows.iter() {
+                            display.consume(flow).await.map_err(Error::Display)?;
+                        }
+                    }
+                    Ok::<(), Error>(())
+                } => {
+                    res?
+                },
+            }
+        }
+        Ok(())
+    }
+
     fn output(&self) -> Output {
         self.output
     }
@@ -173,52 +197,33 @@ impl DisplayRunner for ListCmd {
     }
 
     fn event(&self) -> bool {
-        false
-    }
-
-    async fn process<D: Display + Send + Sync>(
-        &self,
-        mut ct: Conntrack<NfConntrackSocket>,
-        mut display: D,
-    ) -> Result<(), Error> {
-        if self.output.ne(&Output::Json) && !self.no_header() {
-            display.header().await.map_err(Error::Display)?;
-        }
-        while let Some(flows) = ct.try_next().await.map_err(Error::Conntrack)? {
-            for flow in flows.iter() {
-                display.consume(flow).await.map_err(Error::Display)?;
-            }
-        }
-        Ok(())
+        true
     }
 }
 
 #[derive(Debug)]
-struct ListOperation {
+struct EventOperation {
     filter: Filter,
 }
 
-impl Operation for ListOperation {
-    fn request(&self) -> Result<Request, Error> {
-        let mut meta = RequestMeta::default()
+impl EventOperation {
+    fn new(filter: Filter) -> EventOperation {
+        EventOperation { filter }
+    }
+}
+
+impl Operation for EventOperation {
+    fn request(&self) -> Result<conntrack::request::Request, Error> {
+        let meta = RequestMeta::default()
             .table(self.filter.table.into())
             .family(self.filter.family.into());
-        if self.filter.zero {
-            meta = meta.zero()
-        }
         Ok(Request::new(
             meta,
-            RequestOperation::List(Some(conntrack::request::Filter::try_from(&self.filter)?)),
+            RequestOperation::Event(Some(conntrack::request::Filter::try_from(&self.filter)?)),
         ))
     }
 
     fn typ(&self) -> OperationType {
-        OperationType::List
-    }
-}
-
-impl ListOperation {
-    fn new(filter: Filter) -> ListOperation {
-        ListOperation { filter }
+        OperationType::Event
     }
 }

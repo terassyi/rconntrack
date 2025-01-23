@@ -30,6 +30,7 @@ pub struct TableDisplay<W: AsyncWriteExt + Unpin + Send + Sync> {
     detailed_status: bool,
     family: Family,
     protocol: Protocol, // default is Tcp, Tcp shows TCP_STATE(when showing Udp flows TCP_STATE is empty.).
+    event: bool,
 }
 
 unsafe impl<W> Send for TableDisplay<W> where W: AsyncWriteExt + Unpin + Send + Sync {}
@@ -53,8 +54,24 @@ where
         Column::ReplySrcPort(0),
         Column::ReplyDstPort(0),
         Column::Flags(String::new()),
-        Column::Mark(0),
-        Column::Use(0),
+        Column::Mark(None),
+        Column::Use(None),
+    ];
+    const EVENT_HEADER: [Column; 14] = [
+        Column::Event(String::new()),
+        Column::Protocol(String::new()),
+        Column::ProtocolNumber(0),
+        Column::Timeout(0),
+        Column::TcpState(None),
+        Column::OrigSrcAddr(String::new()),
+        Column::OrigDstAddr(String::new()),
+        Column::OrigSrcPort(0),
+        Column::OrigDstPort(0),
+        Column::ReplySrcAddr(String::new()),
+        Column::ReplyDstAddr(String::new()),
+        Column::ReplySrcPort(0),
+        Column::ReplyDstPort(0),
+        Column::Flags(String::new()),
     ];
 
     pub fn new(
@@ -62,12 +79,14 @@ where
         detailed_status: bool,
         family: Family,
         protocol: Protocol,
+        event: bool,
     ) -> TableDisplay<W> {
         TableDisplay {
             writer,
             detailed_status,
             family,
             protocol,
+            event,
         }
     }
 
@@ -84,6 +103,13 @@ where
 
         for (i, c) in columns.iter().enumerate() {
             match c {
+                Column::Event(e) => {
+                    if header {
+                        row_str += &format!("{:>7}", c.header());
+                    } else {
+                        row_str += &format!("{:>7}", e);
+                    }
+                }
                 Column::Protocol(p) => {
                     if header {
                         row_str += &format!("{:>8}", c.header());
@@ -198,14 +224,28 @@ where
                     if header {
                         row_str += &format!("{:>5}", c.header());
                     } else {
-                        row_str += &format!("{:>5}", m);
+                        match m {
+                            Some(m) => {
+                                row_str += &format!("{:>5}", m);
+                            }
+                            None => {
+                                row_str += &format!("{:>5}", "");
+                            }
+                        }
                     }
                 }
                 Column::Use(u) => {
                     if header {
                         row_str += &format!("{:>5}", c.header());
                     } else {
-                        row_str += &format!("{:>5}", u);
+                        match u {
+                            Some(u) => {
+                                row_str += &format!("{:>5}", u);
+                            }
+                            None => {
+                                row_str += &format!("{:>5}", "");
+                            }
+                        }
                     }
                 }
             }
@@ -239,6 +279,25 @@ where
         ]
     }
 
+    fn event_columns(&self, flow: &Flow) -> [Column; 14] {
+        [
+            Column::Event(String::from(flow.event_type).to_uppercase()),
+            Column::Protocol(String::from(flow.protocol).to_lowercase()),
+            Column::ProtocolNumber(u8::from(flow.protocol)),
+            Column::Timeout(flow.timeout),
+            Column::TcpState(flow.tcp_state.map(|s| String::from(s).to_uppercase())),
+            Column::OrigSrcAddr(flow.original.src_addr.to_string()),
+            Column::OrigDstAddr(flow.original.dst_addr.to_string()),
+            Column::OrigSrcPort(flow.original.src_port),
+            Column::OrigDstPort(flow.original.dst_port),
+            Column::ReplySrcAddr(flow.reply.src_addr.to_string()),
+            Column::ReplyDstAddr(flow.reply.dst_addr.to_string()),
+            Column::ReplySrcPort(flow.reply.src_port),
+            Column::ReplyDstPort(flow.reply.dst_port),
+            Column::Flags(self.ct_status_to_string(&flow.status)),
+        ]
+    }
+
     fn ct_status_to_string(&self, status: &Status) -> String {
         if self.detailed_status {
             let n = u16::from(status);
@@ -255,14 +314,23 @@ where
     W: tokio::io::AsyncWriteExt + Unpin + Send + Sync,
 {
     async fn consume(&mut self, flow: &Flow) -> Result<(), Error> {
-        let elms = self.columns(flow);
-        let row = self.row(&elms, false);
+        let row = if self.event {
+            let c = self.event_columns(flow);
+            self.row(&c, false)
+        } else {
+            let c = self.columns(flow);
+            self.row(&c, false)
+        };
         self.writer.write(row.as_bytes()).await.map_err(Error::IO)?;
         Ok(())
     }
 
     async fn header(&mut self) -> Result<(), Error> {
-        let row = self.row(&Self::HEADER, true);
+        let row = if self.event {
+            self.row(&Self::EVENT_HEADER, true)
+        } else {
+            self.row(&Self::HEADER, true)
+        };
         self.writer.write(row.as_bytes()).await.map_err(Error::IO)?;
         Ok(())
     }
@@ -270,6 +338,7 @@ where
 
 #[derive(Debug)]
 enum Column {
+    Event(String),
     Protocol(String),
     ProtocolNumber(u8),
     Timeout(u32),
@@ -283,13 +352,14 @@ enum Column {
     ReplySrcPort(u16),
     ReplyDstPort(u16),
     Flags(String),
-    Mark(u32),
-    Use(u32),
+    Mark(Option<u32>),
+    Use(Option<u32>),
 }
 
 impl Column {
     fn header(&self) -> String {
         match self {
+            Column::Event(_) => String::from("EVENT"),
             Column::Protocol(_) => String::from("PROTOCOL"),
             Column::ProtocolNumber(_) => String::from("PROTONUM"),
             Column::Timeout(_) => String::from("TIMEOUT"),

@@ -4,7 +4,7 @@ use error::Error;
 
 pub(crate) mod error;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Output {
     #[default]
     Table,

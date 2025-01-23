@@ -1,17 +1,16 @@
-use std::task::Poll;
+use std::{net::IpAddr, task::Poll};
 
 use error::Error;
+use event::{Event, EventGroup};
 use flow::Flow;
 use futures::Stream;
-use netlink_packet_netfilter::{
-    constants::{AF_INET, AF_INET6, AF_UNSPEC},
-    NetfilterMessage, NetfilterMessageInner,
-};
+use netlink_packet_netfilter::constants::{AF_INET, AF_INET6, AF_UNSPEC};
 use pin_project_lite::pin_project;
 use request::{Filter, Request};
 use socket::{ConntrackSocket, NfConntrackSocket};
 
 pub mod error;
+pub mod event;
 pub mod flow;
 mod message;
 pub mod request;
@@ -26,8 +25,8 @@ pin_project! {
 }
 
 impl Conntrack<NfConntrackSocket> {
-    pub fn new() -> Result<Conntrack<NfConntrackSocket>, Error> {
-        let socket = NfConntrackSocket::new()?;
+    pub fn new(group: EventGroup) -> Result<Conntrack<NfConntrackSocket>, Error> {
+        let socket = NfConntrackSocket::new(group)?;
         Ok(Conntrack {
             socket,
             filter: None,
@@ -47,11 +46,10 @@ where
     }
 
     pub async fn request(&mut self, req: Request) -> Result<(), Error> {
-        let msg = req.message()?;
-
         self.filter = req.filter();
-
-        self.socket.send(msg).await?;
+        if let Some(msg) = req.message()? {
+            self.socket.send(msg).await?;
+        }
 
         Ok(())
     }
@@ -61,20 +59,14 @@ where
             .recv_once()
             .await?
             .iter()
-            .filter_map(|msg| {
-                if let NetfilterMessageInner::CtNetlink(msg) = &msg.inner {
-                    Some(Flow::try_from(msg).map_err(Error::Flow))
-                } else {
-                    None
-                }
-            })
+            .map(|event| Flow::try_from(event).map_err(Error::Flow))
             .collect()
     }
 }
 
 impl<S> Stream for Conntrack<S>
 where
-    S: ConntrackSocket + Stream<Item = Result<Vec<NetfilterMessage>, Error>>,
+    S: ConntrackSocket + Stream<Item = Result<Vec<Event>, Error>>,
 {
     type Item = Result<Vec<Flow>, Error>;
 
@@ -90,13 +82,7 @@ where
                     Ok(msgs) => {
                         let flows: Result<Vec<Flow>, Error> = msgs
                             .iter()
-                            .filter_map(|msg| {
-                                if let NetfilterMessageInner::CtNetlink(msg) = &msg.inner {
-                                    Some(Flow::try_from(msg).map_err(Error::Flow))
-                                } else {
-                                    None
-                                }
-                            })
+                            .map(|event| Flow::try_from(event).map_err(Error::Flow))
                             .collect();
                         let flows = match flows {
                             Ok(f) => f
@@ -125,6 +111,16 @@ pub enum Family {
     #[default]
     Ipv4,
     Ipv6,
+}
+
+impl Family {
+    pub fn is_matched(&self, addr: IpAddr) -> bool {
+        match self {
+            Family::Unspec => true,
+            Family::Ipv4 => addr.is_ipv4(),
+            Family::Ipv6 => addr.is_ipv6(),
+        }
+    }
 }
 
 impl From<Family> for u8 {
@@ -187,6 +183,7 @@ mod tests {
     use futures::TryStreamExt;
 
     use crate::{
+        event::{EventGroup, EventType},
         flow::{Flow, FlowBuilder, Protocol, Status, TcpState, TupleBuilder},
         request::{Filter, Request, RequestMeta, RequestOperation},
         socket::MockConntrackSocket,
@@ -195,6 +192,7 @@ mod tests {
 
     fn ipv4_tcp_flow() -> Flow {
         FlowBuilder::default()
+            .event_type(EventType::Update)
             .original(
                 TupleBuilder::default()
                     .src_addr("1.1.1.1".parse().unwrap())
@@ -225,6 +223,7 @@ mod tests {
 
     fn ipv6_udp_flow() -> Flow {
         FlowBuilder::default()
+            .event_type(EventType::Update)
             .original(
                 TupleBuilder::default()
                     .src_addr("fd00::1".parse().unwrap())
@@ -360,7 +359,7 @@ mod tests {
     #[ignore = "With privilege"]
     #[tokio::test]
     async fn test_conntrack_poll_with_privilege() {
-        let mut ct = Conntrack::new().unwrap();
+        let mut ct = Conntrack::new(EventGroup::default()).unwrap();
         ct.request(Request::new(
             RequestMeta::default(),
             RequestOperation::List(None),

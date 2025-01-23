@@ -4,19 +4,25 @@ use async_trait::async_trait;
 use futures::Stream;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_packet_netfilter::{
-    constants::{AF_INET, AF_INET6, AF_UNSPEC, NFNETLINK_V0},
+    constants::{AF_INET, AF_INET6, AF_UNSPEC},
     ctnetlink::message::CtNetlinkMessage,
-    NetfilterHeader, NetfilterMessage,
+    NetfilterMessage, NetfilterMessageInner,
 };
-use netlink_sys::{protocols::NETLINK_NETFILTER, AsyncSocket, AsyncSocketExt, TokioSocket};
+use netlink_sys::{
+    protocols::NETLINK_NETFILTER, AsyncSocket, AsyncSocketExt, SocketAddr, TokioSocket,
+};
 
-use crate::{error::Error, flow::Flow};
+use crate::{
+    error::{Error, NetlinkError},
+    event::{Event, EventGroup},
+    flow::Flow,
+};
 
 #[async_trait]
 pub trait ConntrackSocket: Stream {
     async fn send(&mut self, msg: NetlinkMessage<NetfilterMessage>) -> Result<(), Error>;
-    async fn recv(&mut self) -> Result<Vec<NetfilterMessage>, Error>;
-    async fn recv_once(&mut self) -> Result<Vec<NetfilterMessage>, Error>;
+    async fn recv(&mut self) -> Result<Vec<Event>, Error>;
+    async fn recv_once(&mut self) -> Result<Vec<Event>, Error>;
 }
 
 pub struct NfConntrackSocket {
@@ -24,8 +30,13 @@ pub struct NfConntrackSocket {
 }
 
 impl NfConntrackSocket {
-    pub(super) fn new() -> Result<NfConntrackSocket, Error> {
-        let socket = TokioSocket::new(NETLINK_NETFILTER).map_err(Error::Socket)?;
+    const SOCKET_AUTOPID: u32 = 0;
+    pub(super) fn new(group: EventGroup) -> Result<NfConntrackSocket, Error> {
+        let mut socket = TokioSocket::new(NETLINK_NETFILTER).map_err(Error::Socket)?;
+        let socket_ref_mut = socket.socket_mut();
+        socket_ref_mut
+            .bind(&SocketAddr::new(Self::SOCKET_AUTOPID, group.into()))
+            .map_err(Error::Socket)?;
         Ok(NfConntrackSocket { inner: socket })
     }
 }
@@ -39,8 +50,8 @@ impl ConntrackSocket for NfConntrackSocket {
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Vec<NetfilterMessage>, Error> {
-        let mut msgs = Vec::new();
+    async fn recv(&mut self) -> Result<Vec<Event>, Error> {
+        let mut events = Vec::new();
         let mut done = false;
         loop {
             let (data, _) = self.inner.recv_from_full().await.map_err(Error::Recv)?;
@@ -50,14 +61,19 @@ impl ConntrackSocket for NfConntrackSocket {
                 let msg = <NetlinkMessage<NetfilterMessage>>::deserialize(&data[read..])
                     .map_err(Error::Netfilter)?;
                 read += msg.buffer_len();
+                let flag = msg.header.flags;
                 match msg.payload {
                     NetlinkPayload::Done(_) => {
                         done = true;
                         break;
                     }
-                    NetlinkPayload::Error(e) => return Err(Error::NetlinkMessage(e.raw_code())),
+                    NetlinkPayload::Error(e) => {
+                        return Err(Error::NetlinkMessage(NetlinkError::from(e.raw_code())))
+                    }
                     NetlinkPayload::InnerMessage(msg) => {
-                        msgs.push(msg);
+                        if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
+                            events.push(Event::new(msg, flag));
+                        }
                     }
                     _ => {}
                 }
@@ -67,11 +83,11 @@ impl ConntrackSocket for NfConntrackSocket {
             }
         }
 
-        Ok(msgs)
+        Ok(events)
     }
 
-    async fn recv_once(&mut self) -> Result<Vec<NetfilterMessage>, Error> {
-        let mut msgs = Vec::new();
+    async fn recv_once(&mut self) -> Result<Vec<Event>, Error> {
+        let mut events = Vec::new();
         let (data, _) = self.inner.recv_from_full().await.map_err(Error::Recv)?;
         let data_l = data.len();
         let mut read = 0;
@@ -79,24 +95,29 @@ impl ConntrackSocket for NfConntrackSocket {
             let msg = <NetlinkMessage<NetfilterMessage>>::deserialize(&data[read..])
                 .map_err(Error::Netfilter)?;
             read += msg.buffer_len();
+            let flag = msg.header.flags;
             match msg.payload {
                 NetlinkPayload::Done(_) => {
                     break;
                 }
-                NetlinkPayload::Error(e) => return Err(Error::NetlinkMessage(e.raw_code())),
+                NetlinkPayload::Error(e) => {
+                    return Err(Error::NetlinkMessage(NetlinkError::from(e.raw_code())))
+                }
                 NetlinkPayload::InnerMessage(msg) => {
-                    msgs.push(msg);
+                    if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
+                        events.push(Event::new(msg, flag));
+                    }
                 }
                 _ => {}
             }
         }
 
-        Ok(msgs)
+        Ok(events)
     }
 }
 
 impl Stream for NfConntrackSocket {
-    type Item = Result<Vec<NetfilterMessage>, Error>;
+    type Item = Result<Vec<Event>, Error>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -105,7 +126,7 @@ impl Stream for NfConntrackSocket {
         match self.inner.poll_recv_from_full(cx) {
             Poll::Ready(res) => match res {
                 Ok((buf, _)) => {
-                    let mut msgs = Vec::new();
+                    let mut events = Vec::new();
                     let l = buf.len();
                     let mut read = 0;
                     while l > read {
@@ -115,6 +136,7 @@ impl Stream for NfConntrackSocket {
                                 Err(e) => return Poll::Ready(Some(Err(Error::Netfilter(e)))),
                             };
                         read += msg.buffer_len();
+                        let flag = msg.header.flags;
                         match msg.payload {
                             NetlinkPayload::Done(_) => {
                                 // When receiving a done message, msgs must be empty.
@@ -122,15 +144,19 @@ impl Stream for NfConntrackSocket {
                                 return Poll::Ready(None);
                             }
                             NetlinkPayload::Error(e) => {
-                                return Poll::Ready(Some(Err(Error::NetlinkMessage(e.raw_code()))));
+                                return Poll::Ready(Some(Err(Error::NetlinkMessage(
+                                    NetlinkError::from(e.raw_code()),
+                                ))));
                             }
                             NetlinkPayload::InnerMessage(msg) => {
-                                msgs.push(msg);
+                                if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
+                                    events.push(Event::new(msg, flag));
+                                }
                             }
                             _ => {}
                         }
                     }
-                    Poll::Ready(Some(Ok(msgs)))
+                    Poll::Ready(Some(Ok(events)))
                 }
                 Err(e) => Poll::Ready(Some(Err(Error::Poll(e)))),
             },
@@ -142,8 +168,8 @@ impl Stream for NfConntrackSocket {
 #[derive(Debug, Default)]
 pub(super) struct MockConntrackSocket {
     request: Option<NetfilterMessage>,
-    ipv4_data: Vec<NetfilterMessage>,
-    ipv6_data: Vec<NetfilterMessage>,
+    ipv4_data: Vec<Event>,
+    ipv6_data: Vec<Event>,
     ipv4_index: usize,
     ipv6_index: usize,
 }
@@ -162,19 +188,13 @@ impl MockConntrackSocket {
 
     #[allow(dead_code)]
     pub(super) fn with_flow(ipv4_flows: Vec<Flow>, ipv6_flows: Vec<Flow>) -> MockConntrackSocket {
-        let ipv4_header = NetfilterHeader::new(AF_INET, NFNETLINK_V0, 0);
-        let ipv6_header = NetfilterHeader::new(AF_INET6, NFNETLINK_V0, 0);
         let ipv4_msgs = ipv4_flows
             .iter()
-            .map(|f| {
-                NetfilterMessage::new(ipv4_header.clone(), CtNetlinkMessage::try_from(f).unwrap())
-            })
+            .map(|f| Event::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
             .collect();
         let ipv6_msgs = ipv6_flows
             .iter()
-            .map(|f| {
-                NetfilterMessage::new(ipv6_header.clone(), CtNetlinkMessage::try_from(f).unwrap())
-            })
+            .map(|f| Event::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
             .collect();
 
         MockConntrackSocket {
@@ -187,14 +207,14 @@ impl MockConntrackSocket {
     }
 
     #[allow(dead_code)]
-    pub(super) fn with_msg(
-        ipv4_msg: Vec<NetfilterMessage>,
-        ipv6_msg: Vec<NetfilterMessage>,
+    pub(super) fn with_event(
+        ipv4_event: Vec<Event>,
+        ipv6_event: Vec<Event>,
     ) -> MockConntrackSocket {
         MockConntrackSocket {
             request: None,
-            ipv4_data: ipv4_msg,
-            ipv6_data: ipv6_msg,
+            ipv4_data: ipv4_event,
+            ipv6_data: ipv6_event,
             ipv4_index: 0,
             ipv6_index: 0,
         }
@@ -227,17 +247,17 @@ impl ConntrackSocket for MockConntrackSocket {
         }
     }
 
-    async fn recv(&mut self) -> Result<Vec<NetfilterMessage>, Error> {
+    async fn recv(&mut self) -> Result<Vec<Event>, Error> {
         Ok(vec![])
     }
 
-    async fn recv_once(&mut self) -> Result<Vec<NetfilterMessage>, Error> {
+    async fn recv_once(&mut self) -> Result<Vec<Event>, Error> {
         Ok(vec![])
     }
 }
 
 impl Stream for MockConntrackSocket {
-    type Item = Result<Vec<NetfilterMessage>, Error>;
+    type Item = Result<Vec<Event>, Error>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -341,71 +361,57 @@ impl Stream for MockConntrackSocket {
 #[cfg(test)]
 mod tests {
     use futures::TryStreamExt;
-    use netlink_packet_netfilter::{
-        constants::{AF_INET, AF_INET6, NFNETLINK_V0},
-        ctnetlink::message::CtNetlinkMessage,
-        NetfilterHeader, NetfilterMessage, NetfilterMessageInner,
-    };
+    use netlink_packet_netfilter::ctnetlink::message::CtNetlinkMessage;
 
     use crate::{
+        event::Event,
         message::MessageBuilder,
         socket::{ConntrackSocket, MockConntrackSocket},
         Family, Table,
     };
 
-    const IPV4_NF_HDR: NetfilterHeader = NetfilterHeader {
-        family: AF_INET,
-        version: NFNETLINK_V0,
-        res_id: 0,
-    };
-
-    const IPV4_MSGS: [NetfilterMessage; 5] = [
-        NetfilterMessage {
-            header: IPV4_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+    const IPV4_MSGS: [Event; 5] = [
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
-        NetfilterMessage {
-            header: IPV4_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
-        NetfilterMessage {
-            header: IPV4_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
-        NetfilterMessage {
-            header: IPV4_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
-        NetfilterMessage {
-            header: IPV4_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
     ];
 
-    const IPV6_NF_HDR: NetfilterHeader = NetfilterHeader {
-        family: AF_INET6,
-        version: NFNETLINK_V0,
-        res_id: 0,
-    };
-
-    const IPV6_MSGS: [NetfilterMessage; 3] = [
-        NetfilterMessage {
-            header: IPV6_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+    const IPV6_MSGS: [Event; 3] = [
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
-        NetfilterMessage {
-            header: IPV6_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
-        NetfilterMessage {
-            header: IPV6_NF_HDR,
-            inner: NetfilterMessageInner::CtNetlink(CtNetlinkMessage::New(vec![])),
+        Event {
+            flag: 0,
+            msg: CtNetlinkMessage::New(vec![]),
         },
     ];
 
     #[tokio::test]
     async fn test_mock_conntrack_socket_poll() {
-        let mut mock_socket = MockConntrackSocket::with_msg(IPV4_MSGS.to_vec(), IPV6_MSGS.to_vec());
+        let mut mock_socket =
+            MockConntrackSocket::with_event(IPV4_MSGS.to_vec(), IPV6_MSGS.to_vec());
         let mut read = 0;
         mock_socket
             .send(MessageBuilder::new(Family::Unspec, Table::Conntrack).list())
