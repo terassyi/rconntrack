@@ -15,6 +15,8 @@ use netlink_packet_netfilter::ctnetlink::{
 use netlink_packet_utils::DecodeError;
 use serde::{ser::SerializeSeq, Serialize};
 
+use crate::event::{Event, EventType};
+
 #[derive(Debug, thiserror::Error)]
 pub enum FlowError {
     #[error("invalid message type: {0}")]
@@ -33,14 +35,39 @@ pub enum FlowError {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Flow {
+    pub event_type: EventType,
     pub original: Tuple,
     pub reply: Tuple,
     pub protocol: Protocol,
-    pub mark: u32,
-    pub r#use: u32,
+    pub mark: Option<u32>,
+    pub r#use: Option<u32>,
     pub tcp_state: Option<TcpState>,
     pub status: Status,
     pub timeout: u32,
+}
+
+impl TryFrom<&Event> for Flow {
+    type Error = FlowError;
+
+    fn try_from(event: &Event) -> Result<Self, Self::Error> {
+        // This constant is defined in Linux kernel (linux/netlink.h)
+        const NLM_F_CREATE: u16 = 0x400;
+        match &event.msg {
+            CtNetlinkMessage::New(nlas) => {
+                let mut builder = FlowBuilder::try_from(nlas)?;
+                builder = if event.flag & NLM_F_CREATE != 0 {
+                    builder.event_type(EventType::New)
+                } else {
+                    builder.event_type(EventType::Update)
+                };
+                builder.build()
+            }
+            CtNetlinkMessage::Delete(nlas) => FlowBuilder::try_from(nlas)?
+                .event_type(EventType::Destroy)
+                .build(),
+            _ => Err(FlowError::InvalidMessageType(event.msg.message_type())),
+        }
+    }
 }
 
 impl TryFrom<&CtNetlinkMessage> for Flow {
@@ -48,62 +75,14 @@ impl TryFrom<&CtNetlinkMessage> for Flow {
 
     fn try_from(msg: &CtNetlinkMessage) -> Result<Self, Self::Error> {
         // We can parse the complete flow only from CtNetlinkMessage::New().
-        if let CtNetlinkMessage::New(nlas) = msg {
-            let mut flow_builder = FlowBuilder::default();
-            for nla in nlas.iter() {
-                match nla {
-                    FlowNla::Orig(orig) => {
-                        let mut tuple_builder = TupleBuilder::default();
-                        for nla in orig.iter() {
-                            match nla {
-                                TupleNla::Ip(t) => {
-                                    tuple_builder =
-                                        tuple_builder.src_addr(t.src_addr).dst_addr(t.dst_addr)
-                                }
-                                TupleNla::Protocol(t) => {
-                                    tuple_builder =
-                                        tuple_builder.src_port(t.src_port).dst_port(t.dst_port);
-                                }
-                            }
-                        }
-                        flow_builder = flow_builder.original(tuple_builder.build()?);
-                    }
-                    FlowNla::Reply(rep) => {
-                        let mut tuple_builder = TupleBuilder::default();
-                        for nla in rep.iter() {
-                            match nla {
-                                TupleNla::Ip(t) => {
-                                    tuple_builder =
-                                        tuple_builder.src_addr(t.src_addr).dst_addr(t.dst_addr)
-                                }
-                                TupleNla::Protocol(t) => {
-                                    tuple_builder =
-                                        tuple_builder.src_port(t.src_port).dst_port(t.dst_port);
-                                    flow_builder =
-                                        flow_builder.protocol(Protocol::from(t.protocol));
-                                }
-                            }
-                        }
-                        flow_builder = flow_builder.reply(tuple_builder.build()?);
-                    }
-                    FlowNla::ProtocolInfo(info) => {
-                        if let ProtocolInfo::Tcp(info) = info {
-                            flow_builder = flow_builder.tcp_state(TcpState::try_from(info.state)?);
-                        }
-                    }
-                    FlowNla::Mark(v) => flow_builder = flow_builder.mark(*v),
-                    FlowNla::Use(v) => flow_builder = flow_builder.r#use(*v),
-                    FlowNla::Timeout(t) => flow_builder = flow_builder.timeout(*t),
-                    FlowNla::Status(s) => {
-                        flow_builder = flow_builder.status(Status::from(s));
-                    }
-                    FlowNla::Id(_v) => { /* do nothing */ }
-                    FlowNla::Other(_v) => { /* do nothing */ }
-                }
-            }
-            Ok(flow_builder.build()?)
-        } else {
-            Err(FlowError::InvalidMessageType(msg.message_type()))
+        match msg {
+            CtNetlinkMessage::New(nlas) => FlowBuilder::try_from(nlas)?
+                .event_type(EventType::New)
+                .build(),
+            CtNetlinkMessage::Delete(nlas) => FlowBuilder::try_from(nlas)?
+                .event_type(EventType::Destroy)
+                .build(),
+            _ => Err(FlowError::InvalidMessageType(msg.message_type())),
         }
     }
 }
@@ -165,9 +144,13 @@ impl TryFrom<&Flow> for CtNetlinkMessage {
         };
         nlas.push(FlowNla::ProtocolInfo(protocol_info));
         // mark
-        nlas.push(FlowNla::Mark(flow.mark));
+        if let Some(m) = flow.mark {
+            nlas.push(FlowNla::Mark(m));
+        }
         // use
-        nlas.push(FlowNla::Use(flow.r#use));
+        if let Some(u) = flow.r#use {
+            nlas.push(FlowNla::Use(u));
+        }
         // timeout
         nlas.push(FlowNla::Timeout(flow.timeout));
         // status
@@ -181,6 +164,7 @@ impl TryFrom<&Flow> for CtNetlinkMessage {
 
 #[derive(Debug, Default)]
 pub(super) struct FlowBuilder {
+    event_type: Option<EventType>,
     original: Option<Tuple>,
     reply: Option<Tuple>,
     protocol: Option<Protocol>,
@@ -192,6 +176,10 @@ pub(super) struct FlowBuilder {
 }
 
 impl FlowBuilder {
+    pub(super) fn event_type(mut self, t: EventType) -> Self {
+        self.event_type = Some(t);
+        self
+    }
     pub(super) fn original(mut self, tuple: Tuple) -> Self {
         self.original = Some(tuple);
         self
@@ -233,7 +221,11 @@ impl FlowBuilder {
     }
 
     pub(super) fn build(&self) -> Result<Flow, FlowError> {
+        let event_type = self
+            .event_type
+            .ok_or(FlowError::MissingField("event_type".to_string()))?;
         Ok(Flow {
+            event_type,
             original: self
                 .original
                 .clone()
@@ -245,21 +237,78 @@ impl FlowBuilder {
             protocol: self
                 .protocol
                 .ok_or(FlowError::MissingField("protocol".to_string()))?,
-            mark: self
-                .mark
-                .ok_or(FlowError::MissingField("mark".to_string()))?,
-            r#use: self
-                .r#use
-                .ok_or(FlowError::MissingField("use".to_string()))?,
+            mark: self.mark,
+            r#use: self.r#use,
             tcp_state: self.tcp_state,
             status: self
                 .status
                 .clone()
                 .ok_or(FlowError::MissingField("status".to_string()))?,
-            timeout: self
-                .timeout
-                .ok_or(FlowError::MissingField("timeout".to_string()))?,
+            timeout: if event_type.eq(&EventType::Update) {
+                self.timeout
+                    .ok_or(FlowError::MissingField("timeout".to_string()))?
+            } else {
+                0
+            },
         })
+    }
+}
+
+impl TryFrom<&Vec<FlowNla>> for FlowBuilder {
+    type Error = FlowError;
+    fn try_from(nlas: &Vec<FlowNla>) -> Result<Self, Self::Error> {
+        let mut flow_builder = FlowBuilder::default();
+        for nla in nlas.iter() {
+            match nla {
+                FlowNla::Orig(orig) => {
+                    let mut tuple_builder = TupleBuilder::default();
+                    for nla in orig.iter() {
+                        match nla {
+                            TupleNla::Ip(t) => {
+                                tuple_builder =
+                                    tuple_builder.src_addr(t.src_addr).dst_addr(t.dst_addr)
+                            }
+                            TupleNla::Protocol(t) => {
+                                tuple_builder =
+                                    tuple_builder.src_port(t.src_port).dst_port(t.dst_port);
+                            }
+                        }
+                    }
+                    flow_builder = flow_builder.original(tuple_builder.build()?);
+                }
+                FlowNla::Reply(rep) => {
+                    let mut tuple_builder = TupleBuilder::default();
+                    for nla in rep.iter() {
+                        match nla {
+                            TupleNla::Ip(t) => {
+                                tuple_builder =
+                                    tuple_builder.src_addr(t.src_addr).dst_addr(t.dst_addr)
+                            }
+                            TupleNla::Protocol(t) => {
+                                tuple_builder =
+                                    tuple_builder.src_port(t.src_port).dst_port(t.dst_port);
+                                flow_builder = flow_builder.protocol(Protocol::from(t.protocol));
+                            }
+                        }
+                    }
+                    flow_builder = flow_builder.reply(tuple_builder.build()?);
+                }
+                FlowNla::ProtocolInfo(info) => {
+                    if let ProtocolInfo::Tcp(info) = info {
+                        flow_builder = flow_builder.tcp_state(TcpState::try_from(info.state)?);
+                    }
+                }
+                FlowNla::Mark(v) => flow_builder = flow_builder.mark(*v),
+                FlowNla::Use(v) => flow_builder = flow_builder.r#use(*v),
+                FlowNla::Timeout(t) => flow_builder = flow_builder.timeout(*t),
+                FlowNla::Status(s) => {
+                    flow_builder = flow_builder.status(Status::from(s));
+                }
+                FlowNla::Id(_v) => { /* do nothing */ }
+                FlowNla::Other(_v) => { /* do nothing */ }
+            }
+        }
+        Ok(flow_builder)
     }
 }
 

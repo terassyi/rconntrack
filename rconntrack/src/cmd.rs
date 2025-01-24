@@ -1,13 +1,12 @@
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use conntrack::{socket::NfConntrackSocket, Conntrack};
-use display::{json::JsonDisplay, table::TableDisplay, Display};
-use futures::TryStreamExt;
-use tokio::io::AsyncWriteExt;
+use display::Display;
 
 use crate::{
     config::{Family, Output, Protocol},
     error::Error,
+    event::EventCmd,
     get::GetCmd,
     list::ListCmd,
     version::VersionCmd,
@@ -31,6 +30,7 @@ pub(super) enum SubCmd {
     Version(VersionCmd),
     List(ListCmd),
     Get(GetCmd),
+    Event(EventCmd),
 }
 
 impl Cmd {
@@ -39,6 +39,7 @@ impl Cmd {
             SubCmd::Version(version) => version.run().await,
             SubCmd::List(list) => list.run().await,
             SubCmd::Get(get) => get.run().await,
+            SubCmd::Event(event) => event.run().await,
         }
     }
 }
@@ -50,37 +51,10 @@ pub(super) trait DisplayRunner {
     fn family(&self) -> Family;
     fn protocol(&self) -> Protocol;
     fn no_header(&self) -> bool;
-    async fn display<W: AsyncWriteExt + Unpin + Send + Sync>(
+    fn event(&self) -> bool;
+    async fn process<D: Display + Send + Sync>(
         &self,
         mut ct: Conntrack<NfConntrackSocket>,
-        writer: W,
-    ) -> Result<(), Error> {
-        match self.output() {
-            Output::Table => {
-                let mut table_display = TableDisplay::new(
-                    writer,
-                    self.detailed_status(),
-                    self.family().into(),
-                    self.protocol().into(),
-                );
-                if !self.no_header() {
-                    table_display.header().await.map_err(Error::Display)?;
-                }
-                while let Some(flows) = ct.try_next().await.map_err(Error::Conntrack)? {
-                    for flow in flows.iter() {
-                        table_display.consume(flow).await.map_err(Error::Display)?;
-                    }
-                }
-            }
-            Output::Json => {
-                let mut json_display = JsonDisplay::new(writer);
-                while let Some(flows) = ct.try_next().await.map_err(Error::Conntrack)? {
-                    for flow in flows.iter() {
-                        json_display.consume(flow).await.map_err(Error::Display)?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
+        mut display: D,
+    ) -> Result<(), Error>;
 }

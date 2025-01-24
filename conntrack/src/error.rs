@@ -28,9 +28,38 @@ pub enum Error {
     #[error("netlink error: {0}")]
     Netfilter(DecodeError),
     #[error("netlink error message: {0}")]
-    NetlinkMessage(i32), // TODO: implement detailed netlink error message kind.
+    NetlinkMessage(NetlinkError),
     #[error("flow error: {0}")]
     Flow(FlowError),
     #[error("dummy")]
     Dummy,
+}
+
+#[derive(Debug, Error)]
+pub enum NetlinkError {
+    #[error("operation not permitted")]
+    OperationNotPermitted,
+    #[error("no entry")]
+    NoEntry,
+    #[error("I/O")]
+    IO,
+    #[error("already exists")]
+    AlreadyExists,
+    #[error("invalid argument")]
+    InvalidArgument,
+    #[error("other: {0}")]
+    Other(i32),
+}
+
+impl From<i32> for NetlinkError {
+    fn from(e: i32) -> Self {
+        match e {
+            -1 => Self::OperationNotPermitted,
+            -2 => Self::NoEntry,
+            -5 => Self::IO,
+            -17 => Self::AlreadyExists,
+            -22 => Self::InvalidArgument,
+            _ => Self::Other(e),
+        }
+    }
 }

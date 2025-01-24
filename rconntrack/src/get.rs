@@ -5,15 +5,17 @@ use clap::Parser;
 use conntrack::{
     flow::Tuple,
     request::{Direction, GetParams, Request, RequestMeta, RequestOperation},
+    socket::NfConntrackSocket,
+    Conntrack,
 };
 use display::{json::JsonDisplay, table::TableDisplay, Display};
 use thiserror::Error;
 
 use crate::{
-    cmd::Runner,
+    cmd::{DisplayRunner, Runner},
     config::{Family, Output, Protocol, Table},
     error::Error,
-    executor::{Executor, Operation},
+    executor::{Executor, Operation, OperationType},
 };
 
 const PARAMS_FOR_BOTH_MSG: &str = r"When acceptable parameters for the either direction is given, parameters for the another directions are ignored.
@@ -151,31 +153,65 @@ impl Runner for GetCmd {
         let op = GetOperation::new(self.table, self.family, self.protocol, directed_tuple);
 
         let executor = Executor::new(op);
-        let mut ct = executor.exec().await?;
-        let flows = ct.recv_once().await.map_err(Error::Conntrack)?;
+        let ct = executor.exec().await?;
         match self.output {
             Output::Table => {
-                let mut table_display = TableDisplay::new(
+                let table_display = TableDisplay::new(
                     tokio::io::stdout(),
                     self.detailed_status,
                     self.family.into(),
                     self.protocol.into(),
+                    false,
                 );
-                if !self.no_header {
-                    table_display.header().await.map_err(Error::Display)?;
-                }
-                for flow in flows.iter() {
-                    table_display.consume(flow).await.map_err(Error::Display)?;
-                }
+
+                self.process(ct, table_display).await
             }
             Output::Json => {
-                let mut json_display = JsonDisplay::new(tokio::io::stdout());
-                for flow in flows.iter() {
-                    json_display.consume(flow).await.map_err(Error::Display)?;
-                }
+                let json_display = JsonDisplay::new(tokio::io::stdout());
+                self.process(ct, json_display).await
             }
         }
+    }
+}
+
+#[async_trait]
+impl DisplayRunner for GetCmd {
+    async fn process<D: Display + Send + Sync>(
+        &self,
+        mut ct: Conntrack<NfConntrackSocket>,
+        mut display: D,
+    ) -> Result<(), Error> {
+        if self.output.ne(&Output::Json) && !self.no_header() {
+            display.header().await.map_err(Error::Display)?;
+        }
+        for flow in ct.recv_once().await.map_err(Error::Conntrack)?.iter() {
+            display.consume(flow).await.map_err(Error::Display)?;
+        }
         Ok(())
+    }
+
+    fn output(&self) -> Output {
+        self.output
+    }
+
+    fn detailed_status(&self) -> bool {
+        self.detailed_status
+    }
+
+    fn family(&self) -> Family {
+        self.family
+    }
+
+    fn protocol(&self) -> Protocol {
+        self.protocol
+    }
+
+    fn no_header(&self) -> bool {
+        self.no_header
+    }
+
+    fn event(&self) -> bool {
+        false
     }
 }
 
@@ -213,6 +249,10 @@ impl Operation for GetOperation {
             meta,
             RequestOperation::Get(GetParams::new(self.protocol.into(), self.tuple.clone())),
         ))
+    }
+
+    fn typ(&self) -> OperationType {
+        OperationType::Get
     }
 }
 

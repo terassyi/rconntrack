@@ -26,12 +26,13 @@ impl Request {
         Request { meta, op }
     }
 
-    pub fn message(&self) -> Result<NetlinkMessage<NetfilterMessage>, Error> {
+    pub fn message(&self) -> Result<Option<NetlinkMessage<NetfilterMessage>>, Error> {
         let builder = MessageBuilder::from(&self.meta);
 
         match &self.op {
-            RequestOperation::List(_) => Ok(builder.list()),
-            RequestOperation::Get(param) => Ok(builder.get(param)),
+            RequestOperation::List(_) => Ok(Some(builder.list())),
+            RequestOperation::Get(param) => Ok(Some(builder.get(param))),
+            RequestOperation::Event(_) => Ok(None),
         }
     }
 
@@ -44,6 +45,7 @@ impl Request {
 pub enum RequestOperation {
     List(Option<Filter>),
     Get(GetParams),
+    Event(Option<Filter>),
 }
 
 impl RequestOperation {
@@ -51,6 +53,7 @@ impl RequestOperation {
         match self {
             RequestOperation::List(f) => f.clone(),
             RequestOperation::Get(_) => None,
+            RequestOperation::Event(f) => f.clone(),
         }
     }
 }
@@ -100,6 +103,7 @@ impl From<&RequestMeta> for MessageBuilder {
 
 #[derive(Debug, Default, Clone)]
 pub struct Filter {
+    family: Option<Family>,
     protocol: Option<Protocol>,
     orig_src_addr: Option<IpNet>,
     orig_dst_addr: Option<IpNet>,
@@ -116,6 +120,11 @@ pub struct Filter {
 }
 
 impl Filter {
+    pub fn family(mut self, f: Family) -> Self {
+        self.family = Some(f);
+        self
+    }
+
     pub fn protocol(mut self, p: Protocol) -> Self {
         self.protocol = Some(p);
         self
@@ -182,6 +191,12 @@ impl Filter {
     }
 
     pub(super) fn apply(&self, flow: &Flow) -> bool {
+        if let Some(f) = self.family {
+            // Is it enough to check that flow.original.src_addr is matched?
+            if !f.is_matched(flow.original.src_addr) {
+                return false;
+            }
+        }
         if let Some(p) = self.protocol {
             if p.ne(&flow.protocol) {
                 return false;
@@ -240,13 +255,23 @@ impl Filter {
             }
         }
         if let Some(mark) = self.mark {
-            if mark.ne(&flow.mark) {
-                return false;
+            match flow.mark {
+                Some(m) => {
+                    if mark != m {
+                        return false;
+                    }
+                }
+                None => return false,
             }
         }
-        if let Some(u) = self.r#use {
-            if u.ne(&flow.r#use) {
-                return false;
+        if let Some(us) = self.r#use {
+            match flow.r#use {
+                Some(u) => {
+                    if us != u {
+                        return false;
+                    }
+                }
+                None => return false,
             }
         }
         if let Some(s) = &self.status {
@@ -322,12 +347,16 @@ mod tests {
     use ipnet::IpNet;
     use rstest::rstest;
 
-    use crate::flow::{Flow, FlowBuilder, Protocol, Status, TcpState, TupleBuilder};
+    use crate::{
+        event::EventType,
+        flow::{Flow, FlowBuilder, Protocol, Status, TcpState, TupleBuilder},
+    };
 
     use super::Filter;
 
     fn ipv4_tcp_flow() -> Flow {
         FlowBuilder::default()
+            .event_type(EventType::Update)
             .original(
                 TupleBuilder::default()
                     .src_addr("1.1.1.1".parse().unwrap())
@@ -358,6 +387,7 @@ mod tests {
 
     fn ipv6_udp_flow() -> Flow {
         FlowBuilder::default()
+            .event_type(EventType::Update)
             .original(
                 TupleBuilder::default()
                     .src_addr("fd00::1".parse().unwrap())
