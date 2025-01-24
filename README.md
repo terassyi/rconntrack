@@ -13,11 +13,11 @@ Rconntrack provides equivalent features to `conntrack`.
 Currently, rconntrack is under development and only supports limited features.
 
 - [x] list
-- [ ] get
+- [x] get
 - [ ] delete
 - [ ] create
 - [ ] update
-- [ ] event
+- [x] event
 - [ ] flush
 - [ ] show counter
 - [ ] show statistics
