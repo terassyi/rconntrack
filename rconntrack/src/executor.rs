@@ -1,8 +1,8 @@
 use conntrack::{
-    event::{EventGroup, EventType},
+    message::{MessageGroup, MessageType},
     request::Request,
     socket::NfConntrackSocket,
-    Conntrack,
+    Conntrack, ConntrackOption,
 };
 
 use crate::error::Error;
@@ -27,13 +27,15 @@ where
     pub(super) async fn exec(&self) -> Result<Conntrack<NfConntrackSocket>, Error> {
         let mut ct = if self.op.typ().eq(&OperationType::Event) {
             Conntrack::new(
-                EventGroup::default()
-                    .set(EventType::Update)
-                    .set(EventType::Destroy),
+                ConntrackOption::default().set_flow_event_group(
+                    MessageGroup::default()
+                        .set(MessageType::Update)
+                        .set(MessageType::Destroy),
+                ),
             )
             .map_err(Error::Conntrack)?
         } else {
-            Conntrack::new(EventGroup::default()).map_err(Error::Conntrack)?
+            Conntrack::new(ConntrackOption::default()).map_err(Error::Conntrack)?
         };
         let req = self.op.request()?;
         ct.request(req).await.map_err(Error::Conntrack)?;
@@ -46,4 +48,5 @@ pub(crate) enum OperationType {
     Get,
     List,
     Event,
+    Counter,
 }

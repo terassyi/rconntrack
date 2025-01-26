@@ -5,6 +5,7 @@ use cmd::Cmd;
 
 mod cmd;
 mod config;
+mod count;
 mod error;
 mod event;
 mod executor;

@@ -33,6 +33,7 @@ impl Request {
             RequestOperation::List(_) => Ok(Some(builder.list())),
             RequestOperation::Get(param) => Ok(Some(builder.get(param))),
             RequestOperation::Event(_) => Ok(None),
+            RequestOperation::Count => Ok(Some(builder.count())),
         }
     }
 
@@ -46,6 +47,7 @@ pub enum RequestOperation {
     List(Option<Filter>),
     Get(GetParams),
     Event(Option<Filter>),
+    Count,
 }
 
 impl RequestOperation {
@@ -54,6 +56,7 @@ impl RequestOperation {
             RequestOperation::List(f) => f.clone(),
             RequestOperation::Get(_) => None,
             RequestOperation::Event(f) => f.clone(),
+            RequestOperation::Count => None,
         }
     }
 }
@@ -348,15 +351,15 @@ mod tests {
     use rstest::rstest;
 
     use crate::{
-        event::EventType,
         flow::{Flow, FlowBuilder, Protocol, Status, TcpState, TupleBuilder},
+        message::MessageType,
     };
 
     use super::Filter;
 
     fn ipv4_tcp_flow() -> Flow {
         FlowBuilder::default()
-            .event_type(EventType::Update)
+            .event_type(MessageType::Update)
             .original(
                 TupleBuilder::default()
                     .src_addr("1.1.1.1".parse().unwrap())
@@ -387,7 +390,7 @@ mod tests {
 
     fn ipv6_udp_flow() -> Flow {
         FlowBuilder::default()
-            .event_type(EventType::Update)
+            .event_type(MessageType::Update)
             .original(
                 TupleBuilder::default()
                     .src_addr("fd00::1".parse().unwrap())

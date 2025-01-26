@@ -31,6 +31,8 @@ pub enum Error {
     NetlinkMessage(NetlinkError),
     #[error("flow error: {0}")]
     Flow(FlowError),
+    #[error("message error: {0}")]
+    Message(String),
     #[error("dummy")]
     Dummy,
 }

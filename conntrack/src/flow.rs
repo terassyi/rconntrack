@@ -15,7 +15,7 @@ use netlink_packet_netfilter::ctnetlink::{
 use netlink_packet_utils::DecodeError;
 use serde::{ser::SerializeSeq, Serialize};
 
-use crate::event::{Event, EventType};
+use crate::message::{Message, MessageType};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FlowError {
@@ -35,7 +35,7 @@ pub enum FlowError {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Flow {
-    pub event_type: EventType,
+    pub event_type: MessageType,
     pub original: Tuple,
     pub reply: Tuple,
     pub protocol: Protocol,
@@ -46,26 +46,26 @@ pub struct Flow {
     pub timeout: u32,
 }
 
-impl TryFrom<&Event> for Flow {
+impl TryFrom<&Message> for Flow {
     type Error = FlowError;
 
-    fn try_from(event: &Event) -> Result<Self, Self::Error> {
+    fn try_from(msg: &Message) -> Result<Self, Self::Error> {
         // This constant is defined in Linux kernel (linux/netlink.h)
         const NLM_F_CREATE: u16 = 0x400;
-        match &event.msg {
+        match &msg.msg {
             CtNetlinkMessage::New(nlas) => {
                 let mut builder = FlowBuilder::try_from(nlas)?;
-                builder = if event.flag & NLM_F_CREATE != 0 {
-                    builder.event_type(EventType::New)
+                builder = if msg.flag & NLM_F_CREATE != 0 {
+                    builder.event_type(MessageType::New)
                 } else {
-                    builder.event_type(EventType::Update)
+                    builder.event_type(MessageType::Update)
                 };
                 builder.build()
             }
             CtNetlinkMessage::Delete(nlas) => FlowBuilder::try_from(nlas)?
-                .event_type(EventType::Destroy)
+                .event_type(MessageType::Destroy)
                 .build(),
-            _ => Err(FlowError::InvalidMessageType(event.msg.message_type())),
+            _ => Err(FlowError::InvalidMessageType(msg.msg.message_type())),
         }
     }
 }
@@ -77,10 +77,10 @@ impl TryFrom<&CtNetlinkMessage> for Flow {
         // We can parse the complete flow only from CtNetlinkMessage::New().
         match msg {
             CtNetlinkMessage::New(nlas) => FlowBuilder::try_from(nlas)?
-                .event_type(EventType::New)
+                .event_type(MessageType::New)
                 .build(),
             CtNetlinkMessage::Delete(nlas) => FlowBuilder::try_from(nlas)?
-                .event_type(EventType::Destroy)
+                .event_type(MessageType::Destroy)
                 .build(),
             _ => Err(FlowError::InvalidMessageType(msg.message_type())),
         }
@@ -164,7 +164,7 @@ impl TryFrom<&Flow> for CtNetlinkMessage {
 
 #[derive(Debug, Default)]
 pub(super) struct FlowBuilder {
-    event_type: Option<EventType>,
+    event_type: Option<MessageType>,
     original: Option<Tuple>,
     reply: Option<Tuple>,
     protocol: Option<Protocol>,
@@ -176,7 +176,7 @@ pub(super) struct FlowBuilder {
 }
 
 impl FlowBuilder {
-    pub(super) fn event_type(mut self, t: EventType) -> Self {
+    pub(super) fn event_type(mut self, t: MessageType) -> Self {
         self.event_type = Some(t);
         self
     }
@@ -244,7 +244,7 @@ impl FlowBuilder {
                 .status
                 .clone()
                 .ok_or(FlowError::MissingField("status".to_string()))?,
-            timeout: if event_type.eq(&EventType::Update) {
+            timeout: if event_type.eq(&MessageType::Update) {
                 self.timeout
                     .ok_or(FlowError::MissingField("timeout".to_string()))?
             } else {
