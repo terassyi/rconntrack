@@ -14,15 +14,15 @@ use netlink_sys::{
 
 use crate::{
     error::{Error, NetlinkError},
-    event::{Event, EventGroup},
     flow::Flow,
+    message::{Message, MessageGroup},
 };
 
 #[async_trait]
 pub trait ConntrackSocket: Stream {
     async fn send(&mut self, msg: NetlinkMessage<NetfilterMessage>) -> Result<(), Error>;
-    async fn recv(&mut self) -> Result<Vec<Event>, Error>;
-    async fn recv_once(&mut self) -> Result<Vec<Event>, Error>;
+    async fn recv(&mut self) -> Result<Vec<Message>, Error>;
+    async fn recv_once(&mut self) -> Result<Vec<Message>, Error>;
 }
 
 pub struct NfConntrackSocket {
@@ -31,7 +31,7 @@ pub struct NfConntrackSocket {
 
 impl NfConntrackSocket {
     const SOCKET_AUTOPID: u32 = 0;
-    pub(super) fn new(group: EventGroup) -> Result<NfConntrackSocket, Error> {
+    pub(super) fn new(group: MessageGroup) -> Result<NfConntrackSocket, Error> {
         let mut socket = TokioSocket::new(NETLINK_NETFILTER).map_err(Error::Socket)?;
         let socket_ref_mut = socket.socket_mut();
         socket_ref_mut
@@ -50,7 +50,7 @@ impl ConntrackSocket for NfConntrackSocket {
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Vec<Event>, Error> {
+    async fn recv(&mut self) -> Result<Vec<Message>, Error> {
         let mut events = Vec::new();
         let mut done = false;
         loop {
@@ -72,7 +72,7 @@ impl ConntrackSocket for NfConntrackSocket {
                     }
                     NetlinkPayload::InnerMessage(msg) => {
                         if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
-                            events.push(Event::new(msg, flag));
+                            events.push(Message::new(msg, flag));
                         }
                     }
                     _ => {}
@@ -86,7 +86,7 @@ impl ConntrackSocket for NfConntrackSocket {
         Ok(events)
     }
 
-    async fn recv_once(&mut self) -> Result<Vec<Event>, Error> {
+    async fn recv_once(&mut self) -> Result<Vec<Message>, Error> {
         let mut events = Vec::new();
         let (data, _) = self.inner.recv_from_full().await.map_err(Error::Recv)?;
         let data_l = data.len();
@@ -105,7 +105,7 @@ impl ConntrackSocket for NfConntrackSocket {
                 }
                 NetlinkPayload::InnerMessage(msg) => {
                     if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
-                        events.push(Event::new(msg, flag));
+                        events.push(Message::new(msg, flag));
                     }
                 }
                 _ => {}
@@ -117,7 +117,7 @@ impl ConntrackSocket for NfConntrackSocket {
 }
 
 impl Stream for NfConntrackSocket {
-    type Item = Result<Vec<Event>, Error>;
+    type Item = Result<Vec<Message>, Error>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -150,7 +150,7 @@ impl Stream for NfConntrackSocket {
                             }
                             NetlinkPayload::InnerMessage(msg) => {
                                 if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
-                                    events.push(Event::new(msg, flag));
+                                    events.push(Message::new(msg, flag));
                                 }
                             }
                             _ => {}
@@ -168,8 +168,8 @@ impl Stream for NfConntrackSocket {
 #[derive(Debug, Default)]
 pub(super) struct MockConntrackSocket {
     request: Option<NetfilterMessage>,
-    ipv4_data: Vec<Event>,
-    ipv6_data: Vec<Event>,
+    ipv4_data: Vec<Message>,
+    ipv6_data: Vec<Message>,
     ipv4_index: usize,
     ipv6_index: usize,
 }
@@ -190,11 +190,11 @@ impl MockConntrackSocket {
     pub(super) fn with_flow(ipv4_flows: Vec<Flow>, ipv6_flows: Vec<Flow>) -> MockConntrackSocket {
         let ipv4_msgs = ipv4_flows
             .iter()
-            .map(|f| Event::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
+            .map(|f| Message::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
             .collect();
         let ipv6_msgs = ipv6_flows
             .iter()
-            .map(|f| Event::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
+            .map(|f| Message::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
             .collect();
 
         MockConntrackSocket {
@@ -208,8 +208,8 @@ impl MockConntrackSocket {
 
     #[allow(dead_code)]
     pub(super) fn with_event(
-        ipv4_event: Vec<Event>,
-        ipv6_event: Vec<Event>,
+        ipv4_event: Vec<Message>,
+        ipv6_event: Vec<Message>,
     ) -> MockConntrackSocket {
         MockConntrackSocket {
             request: None,
@@ -247,17 +247,17 @@ impl ConntrackSocket for MockConntrackSocket {
         }
     }
 
-    async fn recv(&mut self) -> Result<Vec<Event>, Error> {
+    async fn recv(&mut self) -> Result<Vec<Message>, Error> {
         Ok(vec![])
     }
 
-    async fn recv_once(&mut self) -> Result<Vec<Event>, Error> {
+    async fn recv_once(&mut self) -> Result<Vec<Message>, Error> {
         Ok(vec![])
     }
 }
 
 impl Stream for MockConntrackSocket {
-    type Item = Result<Vec<Event>, Error>;
+    type Item = Result<Vec<Message>, Error>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -364,45 +364,44 @@ mod tests {
     use netlink_packet_netfilter::ctnetlink::message::CtNetlinkMessage;
 
     use crate::{
-        event::Event,
-        message::MessageBuilder,
+        message::{Message, MessageBuilder},
         socket::{ConntrackSocket, MockConntrackSocket},
         Family, Table,
     };
 
-    const IPV4_MSGS: [Event; 5] = [
-        Event {
+    const IPV4_MSGS: [Message; 5] = [
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
-        Event {
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
-        Event {
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
-        Event {
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
-        Event {
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
     ];
 
-    const IPV6_MSGS: [Event; 3] = [
-        Event {
+    const IPV6_MSGS: [Message; 3] = [
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
-        Event {
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
-        Event {
+        Message {
             flag: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },

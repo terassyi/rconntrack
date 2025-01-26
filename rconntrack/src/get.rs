@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use async_trait::async_trait;
 use clap::Parser;
 use conntrack::{
+    event::Event,
     flow::Tuple,
     request::{Direction, GetParams, Request, RequestMeta, RequestOperation},
     socket::NfConntrackSocket,
@@ -184,8 +185,10 @@ impl DisplayRunner for GetCmd {
         if self.output.ne(&Output::Json) && !self.no_header() {
             display.header().await.map_err(Error::Display)?;
         }
-        for flow in ct.recv_once().await.map_err(Error::Conntrack)?.iter() {
-            display.consume(flow).await.map_err(Error::Display)?;
+        for event in ct.recv_once().await.map_err(Error::Conntrack)?.iter() {
+            if let Event::Flow(flow) = event {
+                display.consume(flow).await.map_err(Error::Display)?;
+            }
         }
         Ok(())
     }

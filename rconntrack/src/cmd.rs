@@ -5,6 +5,7 @@ use display::Display;
 
 use crate::{
     config::{Family, Output, Protocol},
+    count::CountCmd,
     error::Error,
     event::EventCmd,
     get::GetCmd,
@@ -31,6 +32,7 @@ pub(super) enum SubCmd {
     List(ListCmd),
     Get(GetCmd),
     Event(EventCmd),
+    Count(CountCmd),
 }
 
 impl Cmd {
@@ -40,6 +42,7 @@ impl Cmd {
             SubCmd::List(list) => list.run().await,
             SubCmd::Get(get) => get.run().await,
             SubCmd::Event(event) => event.run().await,
+            SubCmd::Count(count) => count.run().await,
         }
     }
 }

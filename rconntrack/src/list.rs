@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use clap::Parser;
 use conntrack::{
+    event::Event,
     flow::TcpState,
     request::{Request, RequestMeta, RequestOperation},
     socket::NfConntrackSocket,
@@ -184,9 +185,11 @@ impl DisplayRunner for ListCmd {
         if self.output.ne(&Output::Json) && !self.no_header() {
             display.header().await.map_err(Error::Display)?;
         }
-        while let Some(flows) = ct.try_next().await.map_err(Error::Conntrack)? {
-            for flow in flows.iter() {
-                display.consume(flow).await.map_err(Error::Display)?;
+        while let Some(events) = ct.try_next().await.map_err(Error::Conntrack)? {
+            for event in events.iter() {
+                if let Event::Flow(flow) = event {
+                    display.consume(flow).await.map_err(Error::Display)?;
+                }
             }
         }
         Ok(())

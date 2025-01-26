@@ -2,10 +2,72 @@ use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_D
 use netlink_packet_netfilter::{
     constants::{NFNETLINK_V0, NLM_F_REQUEST},
     ctnetlink::{message::CtNetlinkMessage, nlas::flow::nla::FlowNla},
-    NetfilterHeader, NetfilterMessage,
+    NetfilterHeader, NetfilterMessage, NetfilterMessageInner,
 };
+use serde::Serialize;
 
 use crate::{request::GetParams, Family, Table};
+
+#[derive(Debug, Clone)]
+pub struct Message {
+    pub flag: u16,
+    pub msg: CtNetlinkMessage,
+}
+
+impl Message {
+    pub fn new(msg: CtNetlinkMessage, flag: u16) -> Message {
+        Message { flag, msg }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MessageType {
+    New = 1,
+    Update = 2,
+    Destroy = 4,
+}
+
+impl From<MessageType> for String {
+    fn from(e: MessageType) -> Self {
+        match e {
+            MessageType::New => String::from("New"),
+            MessageType::Update => String::from("Update"),
+            MessageType::Destroy => String::from("Destroy"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageGroup {
+    inner: u32,
+}
+
+impl MessageGroup {
+    pub fn set(mut self, t: MessageType) -> Self {
+        self.inner |= t as u32;
+        self
+    }
+}
+
+impl Default for MessageGroup {
+    fn default() -> Self {
+        MessageGroup {
+            inner: MessageType::New as u32,
+        }
+    }
+}
+
+impl From<MessageGroup> for u32 {
+    fn from(g: MessageGroup) -> Self {
+        g.inner
+    }
+}
+
+impl From<u32> for MessageGroup {
+    fn from(g: u32) -> Self {
+        MessageGroup { inner: g }
+    }
+}
 
 #[derive(Debug, Default)]
 pub(super) struct MessageBuilder {
@@ -107,6 +169,20 @@ impl MessageBuilder {
                 CtNetlinkMessage::GetUnconfirmed(Some(nlas)),
             )),
         };
+        msg.finalize();
+        msg
+    }
+
+    pub(super) fn count(&self) -> NetlinkMessage<NetfilterMessage> {
+        let mut hdr = NetlinkHeader::default();
+        hdr.flags = self.flag;
+        let mut msg = NetlinkMessage::new(
+            hdr,
+            NetlinkPayload::from(NetfilterMessage::new(
+                NetfilterHeader::new(self.family.into(), NFNETLINK_V0, 0),
+                NetfilterMessageInner::CtNetlink(CtNetlinkMessage::GetStats(None)),
+            )),
+        );
         msg.finalize();
         msg
     }
