@@ -4,12 +4,17 @@ use async_trait::async_trait;
 use clap::Parser;
 use conntrack::{
     event::Event,
-    flow::Tuple,
+    flow::{Flow, Tuple},
     request::{Direction, GetParams, Request, RequestMeta, RequestOperation},
     socket::NfConntrackSocket,
     Conntrack,
 };
-use display::{json::JsonDisplay, table::TableDisplay, Display};
+use display::{
+    flow::{FlowColumn, FlowRow},
+    json::JsonDisplay,
+    table::TableDisplay,
+    Display,
+};
 use thiserror::Error;
 
 use crate::{
@@ -157,13 +162,12 @@ impl Runner for GetCmd {
         let ct = executor.exec().await?;
         match self.output {
             Output::Table => {
-                let table_display = TableDisplay::new(
-                    tokio::io::stdout(),
+                let flow_row = FlowRow::new(
                     self.detailed_status,
                     self.family.into(),
                     self.protocol.into(),
-                    false,
                 );
+                let table_display = TableDisplay::new(tokio::io::stdout(), flow_row);
 
                 self.process(ct, table_display).await
             }
@@ -187,7 +191,10 @@ impl DisplayRunner for GetCmd {
         }
         for event in ct.recv_once().await.map_err(Error::Conntrack)?.iter() {
             if let Event::Flow(flow) = event {
-                display.consume(flow).await.map_err(Error::Display)?;
+                display
+                    .consume::<FlowColumn, Flow>(flow)
+                    .await
+                    .map_err(Error::Display)?;
             }
         }
         Ok(())
@@ -197,24 +204,8 @@ impl DisplayRunner for GetCmd {
         self.output
     }
 
-    fn detailed_status(&self) -> bool {
-        self.detailed_status
-    }
-
-    fn family(&self) -> Family {
-        self.family
-    }
-
-    fn protocol(&self) -> Protocol {
-        self.protocol
-    }
-
     fn no_header(&self) -> bool {
         self.no_header
-    }
-
-    fn event(&self) -> bool {
-        false
     }
 }
 

@@ -12,6 +12,7 @@ mod executor;
 mod filter;
 mod get;
 mod list;
+mod stats;
 mod version;
 
 #[tokio::main]

@@ -1,4 +1,6 @@
-use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_DUMP};
+use netlink_packet_core::{
+    NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_DUMP, NLM_F_MATCH, NLM_F_ROOT,
+};
 use netlink_packet_netfilter::{
     constants::{NFNETLINK_V0, NLM_F_REQUEST},
     ctnetlink::{message::CtNetlinkMessage, nlas::flow::nla::FlowNla},
@@ -11,12 +13,13 @@ use crate::{request::GetParams, Family, Table};
 #[derive(Debug, Clone)]
 pub struct Message {
     pub flag: u16,
+    pub res_id: u16,
     pub msg: CtNetlinkMessage,
 }
 
 impl Message {
-    pub fn new(msg: CtNetlinkMessage, flag: u16) -> Message {
-        Message { flag, msg }
+    pub fn new(msg: CtNetlinkMessage, flag: u16, res_id: u16) -> Message {
+        Message { flag, msg, res_id }
     }
 }
 
@@ -181,6 +184,21 @@ impl MessageBuilder {
             NetlinkPayload::from(NetfilterMessage::new(
                 NetfilterHeader::new(self.family.into(), NFNETLINK_V0, 0),
                 NetfilterMessageInner::CtNetlink(CtNetlinkMessage::GetStats(None)),
+            )),
+        );
+        msg.finalize();
+        msg
+    }
+
+    pub(super) fn stat(&self) -> NetlinkMessage<NetfilterMessage> {
+        let mut hdr = NetlinkHeader::default();
+        hdr.flags = self.flag | NLM_F_ROOT | NLM_F_MATCH;
+
+        let mut msg = NetlinkMessage::new(
+            hdr,
+            NetlinkPayload::from(NetfilterMessage::new(
+                NetfilterHeader::new(self.family.into(), NFNETLINK_V0, 0),
+                NetfilterMessageInner::CtNetlink(CtNetlinkMessage::GetStatsCPU(None)),
             )),
         );
         msg.finalize();

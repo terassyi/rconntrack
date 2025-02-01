@@ -4,13 +4,8 @@ use conntrack::{socket::NfConntrackSocket, Conntrack};
 use display::Display;
 
 use crate::{
-    config::{Family, Output, Protocol},
-    count::CountCmd,
-    error::Error,
-    event::EventCmd,
-    get::GetCmd,
-    list::ListCmd,
-    version::VersionCmd,
+    config::Output, count::CountCmd, error::Error, event::EventCmd, get::GetCmd, list::ListCmd,
+    stats::StatsCmd, version::VersionCmd,
 };
 
 #[derive(Debug, Parser)]
@@ -33,6 +28,7 @@ pub(super) enum SubCmd {
     Get(GetCmd),
     Event(EventCmd),
     Count(CountCmd),
+    Stats(StatsCmd),
 }
 
 impl Cmd {
@@ -43,6 +39,7 @@ impl Cmd {
             SubCmd::Get(get) => get.run().await,
             SubCmd::Event(event) => event.run().await,
             SubCmd::Count(count) => count.run().await,
+            SubCmd::Stats(stat) => stat.run().await,
         }
     }
 }
@@ -50,11 +47,7 @@ impl Cmd {
 #[async_trait]
 pub(super) trait DisplayRunner {
     fn output(&self) -> Output;
-    fn detailed_status(&self) -> bool;
-    fn family(&self) -> Family;
-    fn protocol(&self) -> Protocol;
     fn no_header(&self) -> bool;
-    fn event(&self) -> bool;
     async fn process<D: Display + Send + Sync>(
         &self,
         mut ct: Conntrack<NfConntrackSocket>,

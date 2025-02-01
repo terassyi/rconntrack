@@ -4,11 +4,13 @@ use crate::{
     error::Error,
     flow::{Flow, FlowBuilder},
     message::{Message, MessageType},
+    stats::Stats,
 };
 
 pub enum Event {
     Flow(Flow),
     Count(u32),
+    Stats(Stats),
 }
 
 impl TryFrom<&Message> for Event {
@@ -40,11 +42,14 @@ impl TryFrom<&Message> for Event {
                 let counter = nlas
                     .iter()
                     .find_map(|nla| match nla {
-                        StatNla::Orig(c) => Some(*c),
+                        StatNla::Searched(c) => Some(*c),
                         _ => None,
                     })
                     .ok_or(Error::Message("failed to get the counter".to_string()))?;
                 Ok(Event::Count(counter))
+            }
+            CtNetlinkMessage::GetStatsCPU(Some(nlas)) => {
+                Ok(Event::Stats(Stats::from_nlas(msg.res_id, nlas)))
             }
             _ => Err(Error::Message(format!(
                 "unknown message type: {}",
