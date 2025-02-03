@@ -20,7 +20,7 @@ Currently, rconntrack is under development and only supports limited features.
 - [x] event
 - [ ] flush
 - [x] show counter
-- [ ] show statistics
+- [x] show statistics
 
 ## License
 
