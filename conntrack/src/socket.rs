@@ -71,8 +71,9 @@ impl ConntrackSocket for NfConntrackSocket {
                         return Err(Error::NetlinkMessage(NetlinkError::from(e.raw_code())))
                     }
                     NetlinkPayload::InnerMessage(msg) => {
+                        let res_id = msg.header.res_id;
                         if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
-                            events.push(Message::new(msg, flag));
+                            events.push(Message::new(msg, flag, res_id));
                         }
                     }
                     _ => {}
@@ -104,8 +105,9 @@ impl ConntrackSocket for NfConntrackSocket {
                     return Err(Error::NetlinkMessage(NetlinkError::from(e.raw_code())))
                 }
                 NetlinkPayload::InnerMessage(msg) => {
+                    let res_id = msg.header.res_id;
                     if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
-                        events.push(Message::new(msg, flag));
+                        events.push(Message::new(msg, flag, res_id));
                     }
                 }
                 _ => {}
@@ -149,8 +151,9 @@ impl Stream for NfConntrackSocket {
                                 ))));
                             }
                             NetlinkPayload::InnerMessage(msg) => {
+                                let res_id = msg.header.res_id;
                                 if let NetfilterMessageInner::CtNetlink(msg) = msg.inner {
-                                    events.push(Message::new(msg, flag));
+                                    events.push(Message::new(msg, flag, res_id));
                                 }
                             }
                             _ => {}
@@ -190,11 +193,11 @@ impl MockConntrackSocket {
     pub(super) fn with_flow(ipv4_flows: Vec<Flow>, ipv6_flows: Vec<Flow>) -> MockConntrackSocket {
         let ipv4_msgs = ipv4_flows
             .iter()
-            .map(|f| Message::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
+            .map(|f| Message::new(CtNetlinkMessage::try_from(f).unwrap(), 0, 0))
             .collect();
         let ipv6_msgs = ipv6_flows
             .iter()
-            .map(|f| Message::new(CtNetlinkMessage::try_from(f).unwrap(), 0))
+            .map(|f| Message::new(CtNetlinkMessage::try_from(f).unwrap(), 0, 0))
             .collect();
 
         MockConntrackSocket {
@@ -372,22 +375,27 @@ mod tests {
     const IPV4_MSGS: [Message; 5] = [
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
     ];
@@ -395,14 +403,17 @@ mod tests {
     const IPV6_MSGS: [Message; 3] = [
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
         Message {
             flag: 0,
+            res_id: 0,
             msg: CtNetlinkMessage::New(vec![]),
         },
     ];

@@ -15,6 +15,7 @@ pub mod flow;
 pub mod message;
 pub mod request;
 pub mod socket;
+pub mod stats;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ConntrackOption {

@@ -34,6 +34,7 @@ impl Request {
             RequestOperation::Get(param) => Ok(Some(builder.get(param))),
             RequestOperation::Event(_) => Ok(None),
             RequestOperation::Count => Ok(Some(builder.count())),
+            RequestOperation::Stat => Ok(Some(builder.stat())),
         }
     }
 
@@ -48,6 +49,7 @@ pub enum RequestOperation {
     Get(GetParams),
     Event(Option<Filter>),
     Count,
+    Stat,
 }
 
 impl RequestOperation {
@@ -57,6 +59,7 @@ impl RequestOperation {
             RequestOperation::Get(_) => None,
             RequestOperation::Event(f) => f.clone(),
             RequestOperation::Count => None,
+            RequestOperation::Stat => None,
         }
     }
 }

@@ -2,12 +2,17 @@ use async_trait::async_trait;
 use clap::Parser;
 use conntrack::{
     event::Event,
-    flow::TcpState,
+    flow::{Flow, TcpState},
     request::{Request, RequestMeta, RequestOperation},
     socket::NfConntrackSocket,
     Conntrack,
 };
-use display::{json::JsonDisplay, table::TableDisplay, Display};
+use display::{
+    flow::{EventFlowRow, FlowColumn},
+    json::JsonDisplay,
+    table::TableDisplay,
+    Display,
+};
 use futures::TryStreamExt;
 
 use crate::{
@@ -127,13 +132,12 @@ impl Runner for EventCmd {
 
         match self.output() {
             Output::Table => {
-                let table_display = TableDisplay::new(
-                    tokio::io::stdout(),
-                    self.detailed_status(),
-                    self.family().into(),
-                    self.protocol().into(),
-                    self.event(),
+                let event_flow_row = EventFlowRow::new(
+                    self.detailed_status,
+                    self.family.into(),
+                    self.protocol.into(),
                 );
+                let table_display = TableDisplay::new(tokio::io::stdout(), event_flow_row);
                 self.process(ct, table_display).await
             }
             Output::Json => {
@@ -151,7 +155,7 @@ impl DisplayRunner for EventCmd {
         mut ct: Conntrack<NfConntrackSocket>,
         mut display: D,
     ) -> Result<(), Error> {
-        if self.output.ne(&Output::Json) && !self.no_header() {
+        if self.output().ne(&Output::Json) && !self.no_header() {
             display.header().await.map_err(Error::Display)?;
         }
         loop {
@@ -166,7 +170,7 @@ impl DisplayRunner for EventCmd {
                     while let Some(events) = ct.try_next().await.map_err(Error::Conntrack)? {
                         for event in events.iter() {
                             if let Event::Flow(flow) = event {
-                                display.consume(flow).await.map_err(Error::Display)?;
+                                display.consume::<FlowColumn, Flow>(flow).await.map_err(Error::Display)?;
                             }
                         }
                     }
@@ -183,24 +187,8 @@ impl DisplayRunner for EventCmd {
         self.output
     }
 
-    fn detailed_status(&self) -> bool {
-        self.detailed_status
-    }
-
-    fn family(&self) -> Family {
-        self.family
-    }
-
-    fn protocol(&self) -> Protocol {
-        self.protocol
-    }
-
     fn no_header(&self) -> bool {
         self.no_header
-    }
-
-    fn event(&self) -> bool {
-        true
     }
 }
 

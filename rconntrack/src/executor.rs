@@ -49,4 +49,5 @@ pub(crate) enum OperationType {
     List,
     Event,
     Counter,
+    Stats,
 }

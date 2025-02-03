@@ -3,10 +3,10 @@ resolver = "2"
 members = ["conntrack", "display", "rconntrack"]
 
 [workspace.dependencies]
-async-trait = "0.1.83"
+async-trait = "0.1.86"
 futures = "0.3.31"
-ipnet = "2.10.1"
+ipnet = "2.11.0"
 rstest = "0.24.0"
-thiserror = "2.0.6"
-tokio = { version = "1.42.0", features = ["full"] }
-tokio-macros = { version = "2.4.0" }
+thiserror = "2.0.11"
+tokio = { version = "1.43.0", features = ["full"] }
+tokio-macros = { version = "2.5.0" }

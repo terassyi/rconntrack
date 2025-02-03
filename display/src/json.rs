@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use conntrack::flow::Flow;
+use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::{error::Error, Display};
+use crate::{error::Error, Column, Display};
 
 pub struct JsonDisplay<W: AsyncWriteExt + Unpin + Send + Sync> {
     writer: W,
@@ -25,7 +25,10 @@ impl<W> Display for JsonDisplay<W>
 where
     W: AsyncWriteExt + Unpin + Send + Sync,
 {
-    async fn consume(&mut self, flow: &Flow) -> Result<(), Error> {
+    async fn consume<C: Column, E: Serialize + Send + Sync>(
+        &mut self,
+        flow: &E,
+    ) -> Result<(), Error> {
         let str = serde_json::to_string(flow).map_err(Error::Json)?;
         self.writer.write(str.as_bytes()).await.map_err(Error::IO)?;
         Ok(())
